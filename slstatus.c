@@ -33,6 +33,7 @@ struct arg {
 	const char *args;
 };
 
+static int bat_warn_level = 0;
 static char *smprintf(const char *fmt, ...);
 static char *battery_perc(const char *bat);
 static char *battery_state(const char *bat);
@@ -71,7 +72,7 @@ static void usage(const int eval);
 char *argv0;
 static unsigned short int delay = 0;
 static unsigned short int done;
-static unsigned short int dflag, oflag, nflag;
+static unsigned short int dflag, oflag;
 static Display *dpy;
 
 #include "config.h"
@@ -115,6 +116,23 @@ battery_perc(const char *bat)
 	fscanf(fp, "%i", &perc);
 	fclose(fp);
 
+	if(perc < 30) {
+	  char *notif_cmd = NULL;
+	  if(perc < 6 && bat_warn_level == 2) {
+	    notif_cmd = "notify-send \"BAT: < 6%\" \"Dead is near...\"";
+	    bat_warn_level = 3;
+	  } else if(perc < 15 && bat_warn_level == 1) {
+	    notif_cmd = "notify-send \"BAT: < 15%\" \"Plug the AC please\"";
+	    bat_warn_level = 2;
+	  } else if(perc < 30 && bat_warn_level == 0) {
+	    notif_cmd = "notify-send \"BAT: < 30%\" \"Consider AC\"";
+	    bat_warn_level = 1;
+	  }
+	  if(notif_cmd != NULL) {
+	    pclose(popen(notif_cmd, "r"));
+	  }
+	}
+
 	return smprintf("%d%%", perc);
 }
 
@@ -140,8 +158,6 @@ battery_state(const char *bat)
 		return smprintf("-");
 	} else if (strcmp(state, "Full") == 0) {
 		return smprintf("=");
-	} else if (strcmp(state, "Unknown") == 0) {
-		return smprintf("/");
 	} else {
 		return smprintf("?");
 	}
@@ -449,9 +465,9 @@ run_command(const char *cmd)
 	}
 	fgets(buf, sizeof(buf), fp);
 	pclose(fp);
-	buf[sizeof(buf) - 1] = '\0';
+	buf[sizeof(buf)] = '\0';
 
-	if ((nlptr = strrchr(buf, '\n')) != NULL) {
+	if ((nlptr = strstr(buf, "\n")) != NULL) {
 		nlptr[0] = '\0';
 	}
 
@@ -473,7 +489,7 @@ swap_free(void)
 		return smprintf("%s", UNKNOWN_STR);
 	}
 
-	if ((bytes_read = fread(buf, sizeof(char), sizeof(buf) - 1, fp)) == 0) {
+	if ((bytes_read = fread(buf, sizeof(char), sizeof(buf), fp)) == 0) {
 		warn("swap_free: read error");
 		fclose(fp);
 		return smprintf("%s", UNKNOWN_STR);
@@ -510,7 +526,7 @@ swap_perc(void)
 		return smprintf("%s", UNKNOWN_STR);
 	}
 
-	if ((bytes_read = fread(buf, sizeof(char), sizeof(buf) - 1, fp)) == 0) {
+	if ((bytes_read = fread(buf, sizeof(char), sizeof(buf), fp)) == 0) {
 		warn("swap_perc: read error");
 		fclose(fp);
 		return smprintf("%s", UNKNOWN_STR);
@@ -551,7 +567,7 @@ swap_total(void)
 		warn("Failed to open file /proc/meminfo");
 		return smprintf("%s", UNKNOWN_STR);
 	}
-	if ((bytes_read = fread(buf, sizeof(char), sizeof(buf) - 1, fp)) == 0) {
+	if ((bytes_read = fread(buf, sizeof(char), sizeof(buf), fp)) == 0) {
 		warn("swap_total: read error");
 		fclose(fp);
 		return smprintf("%s", UNKNOWN_STR);
@@ -582,7 +598,7 @@ swap_used(void)
 		warn("Failed to open file /proc/meminfo");
 		return smprintf("%s", UNKNOWN_STR);
 	}
-	if ((bytes_read = fread(buf, sizeof(char), sizeof(buf) - 1, fp)) == 0) {
+	if ((bytes_read = fread(buf, sizeof(char), sizeof(buf), fp)) == 0) {
 		warn("swap_used: read error");
 		fclose(fp);
 		return smprintf("%s", UNKNOWN_STR);
@@ -643,7 +659,8 @@ uptime(void)
 static char *
 username(void)
 {
-	struct passwd *pw = getpwuid(geteuid());
+	uid_t uid = geteuid();
+	struct passwd *pw = getpwuid(uid);
 
 	if (pw == NULL) {
 		warn("Failed to get username");
@@ -667,23 +684,17 @@ vol_perc(const char *card)
 	int v, afd, devmask;
 	char *vnames[] = SOUND_DEVICE_NAMES;
 
-	afd = open(card, O_RDONLY | O_NONBLOCK);
-	if (afd == -1) {
+	afd = open(card, O_RDONLY);
+	if (afd < 0) {
 		warn("Cannot open %s", card);
 		return smprintf(UNKNOWN_STR);
 	}
 
-	if (ioctl(afd, SOUND_MIXER_READ_DEVMASK, &devmask) == -1) {
-		warn("Cannot get volume for %s", card);
-		close(afd);
-		return smprintf("%s", UNKNOWN_STR);
-	}
+	ioctl(afd, MIXER_READ(SOUND_MIXER_DEVMASK), &devmask);
 	for (i = 0; i < (sizeof(vnames) / sizeof((vnames[0]))); i++) {
-		if (devmask & (1 << i) && !strcmp("vol", vnames[i])) {
-			if (ioctl(afd, MIXER_READ(i), &v) == -1) {
-				warn("vol_perc: ioctl");
-				close(afd);
-				return smprintf("%s", UNKNOWN_STR);
+		if (devmask & (1 << i)) {
+			if (!strcmp("vol", vnames[i])) {
+				ioctl(afd, MIXER_READ(i), &v);
 			}
 		}
 	}
@@ -775,7 +786,7 @@ sighandler(const int signo)
 static void
 usage(const int eval)
 {
-	fprintf(stderr, "usage: %s [-d] [-o] [-n] [-v] [-h]\n", argv0);
+	fprintf(stderr, "usage: %s [-d] [-o] [-v] [-h]\n", argv0);
 	exit(eval);
 }
 
@@ -795,9 +806,6 @@ main(int argc, char *argv[])
 		case 'o':
 			oflag = 1;
 			break;
-		case 'n':
-			nflag = 1;
-			break;
 		case 'v':
 			printf("slstatus (C) 2016-2017 slstatus engineers\n");
 			return 0;
@@ -807,7 +815,7 @@ main(int argc, char *argv[])
 			usage(1);
 	} ARGEND
 
-	if ((dflag && oflag) || (dflag && nflag) || (oflag && nflag)) {
+	if (dflag && oflag) {
 		usage(1);
 	}
 	if (dflag && daemon(1, 1) < 0) {
@@ -845,14 +853,11 @@ main(int argc, char *argv[])
 			free(element);
 		}
 
-		if (oflag) {
-			printf("%s\n", status_string);
-		} else if (nflag) {
-			printf("%s\n", status_string);
-			done = 1;
-		} else {
+		if (!oflag) {
 			XStoreName(dpy, DefaultRootWindow(dpy), status_string);
 			XSync(dpy, False);
+		} else {
+			printf("%s\n", status_string);
 		}
 
 		if ((UPDATE_INTERVAL - delay) <= 0) {
