@@ -118,6 +118,10 @@ battery_perc(const char *bat)
 
 	if(perc < 30) {
 	  char *notif_cmd = NULL;
+	  if(perc < 3 && bat_warn_level > 2 && bat_warn_level < 5) {
+	    notif_cmd = "notify-send \"BAT: < 3%\" \"Please kill me now...\"";
+	    bat_warn_level++;
+	  }
 	  if(perc < 6 && bat_warn_level == 2) {
 	    notif_cmd = "notify-send \"BAT: < 6%\" \"Dead is near...\"";
 	    bat_warn_level = 3;
