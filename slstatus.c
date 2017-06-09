@@ -121,7 +121,7 @@ battery_perc(const char *bat)
 	  if(perc < 3 && bat_warn_level > 2 && bat_warn_level < 5) {
 	    notif_cmd = "notify-send \"BAT: < 3%\" \"Please kill me now...\"";
 	    bat_warn_level++;
-	  }
+	 1 }
 	  if(perc < 6 && bat_warn_level == 2) {
 	    notif_cmd = "notify-send \"BAT: < 6%\" \"Dead is near...\"";
 	    bat_warn_level = 3;
@@ -135,6 +135,8 @@ battery_perc(const char *bat)
 	  if(notif_cmd != NULL) {
 	    pclose(popen(notif_cmd, "r"));
 	  }
+	} else {
+	  bat_warn_level = 0;
 	}
 
 	return smprintf("%d%%", perc);
